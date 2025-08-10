@@ -6,16 +6,15 @@ from typing import Dict, List, Set
 
 print("🚀 Starting RentRadar scraper…")
 
-WEBHOOK_URL = "https://hook.eu2.make.com/qsk78c4p25ii0anm32kien7okkmtbit6"  # Make.com webhook
+WEBHOOK_URL = "https://hook.eu2.make.com/ll7gkhmnr3pd2xgwt2sjvp2fw3gzpbil"
 
-# ---- Search regions (Rightmove OUTCODE IDs) ----
+# ---- Areas (Rightmove outcodes) ----
 OUTCODE_LOCATION_IDS: Dict[str, List[str]] = {
     "L18": ["OUTCODE^1350"],
     "L19": ["OUTCODE^1351"],
     "L23": ["OUTCODE^1356"],
     "L25": ["OUTCODE^1358"],
     "L4":  ["OUTCODE^1374"],
-    # Wirral (nicer pockets)
     "CH47": ["OUTCODE^466"],
     "CH48": ["OUTCODE^467"],
     "CH49": ["OUTCODE^468"],
@@ -28,42 +27,54 @@ OUTCODE_LOCATION_IDS: Dict[str, List[str]] = {
 
 MIN_BEDS = 3
 MAX_BEDS = 4
-MAX_PRICE = 1500       # Mariana’s cap
-MIN_BATHS = 2          # must have 2+ bathrooms
+MAX_PRICE = 1500  # Mariana constraint
 
-# ---- ADR by postcode & bed (your numbers) ----
-HARDCODED_NIGHTLY: Dict[str, Dict[int, int]] = {
-    "L18": {3: 135, 4: 206},
-    "L19": {3: 166, 4: 228},
-    "L23": {3: 163, 4: 188},
-    "L25": {3: 149, 4: 214},
-    "L4":  {3: 139, 4: 186},
-    "CH47": {3: 179, 4: 231},
-    "CH48": {3: 176, 4: 264},
-    "CH49": {3: 160, 4: 253},
-    "CH60": {3: 166, 4: 253},
-    "CH61": {3: 163, 4: 224},
-    "CH62": {3: 182, 4: 242},
-    "CH63": {3: 177, 4: 253},
-    "CH64": {3: 195, 4: 273},
+# ---- Nightly rates (ADR) you provided ----
+HARDCODED_NIGHTLY = {
+    "L18": {3:135, 4:206},
+    "L19": {3:166, 4:228},
+    "L23": {3:163, 4:188},
+    "L25": {3:149, 4:214},
+    "L4":  {3:139, 4:186},
+    "CH47":{3:179, 4:231},
+    "CH48":{3:176, 4:264},
+    "CH49":{3:160, 4:253},
+    "CH60":{3:166, 4:253},
+    "CH61":{3:163, 4:224},
+    "CH62":{3:182, 4:242},
+    "CH63":{3:177, 4:253},
+    "CH64":{3:195, 4:273},
 }
 
-# ---- Bills (simple for now; can be made postcode-specific later) ----
-BILLS_ESTIMATE = {3: 550, 4: 600}
+# ---- Bills (estimates) — 3-bed / 4-bed per outcode ----
+BILLS_EST = {
+    "L18": {"3":600, "4":650},
+    "L19": {"3":550, "4":600},
+    "L23": {"3":575, "4":625},
+    "L25": {"3":575, "4":625},
+    "L4":  {"3":550, "4":600},
+    "CH47":{"3":600, "4":650},
+    "CH48":{"3":600, "4":650},
+    "CH49":{"3":575, "4":625},
+    "CH60":{"3":600, "4":650},
+    "CH61":{"3":575, "4":625},
+    "CH62":{"3":575, "4":625},
+    "CH63":{"3":575, "4":625},
+    "CH64":{"3":600, "4":650},
+}
 
-# ---- Target at 70% occupancy ----
-GOOD_PROFIT_TARGET = 1300     # Mariana’s new target
+TARGET_PROFIT_70 = 1300  # ✅ New target
+
 BOOKING_FEE_PCT = 0.15
 
-# Listing content filters
 EXCLUDED_SUBTYPES = {
-    "FLAT", "APARTMENT", "MAISONETTE", "STUDIO",
-    "FLAT SHARE", "HOUSE SHARE", "ROOM", "NOT SPECIFIED",
+    "FLAT","APARTMENT","MAISONETTE","STUDIO",
+    "FLAT SHARE","HOUSE SHARE","ROOM","NOT SPECIFIED",
 }
 EXCLUDED_KEYWORDS = {
-    "RENT TO BUY", "RENT-TO-BUY", "RENT TO OWN", "RENT2BUY",
-    "HOUSE SHARE", "ROOM SHARE", "SHARED", "HMO",
-    "ALL BILLS INCLUDED", "BILLS INCLUDED", "INCLUSIVE OF BILLS",
+    "RENT TO BUY","RENT-TO-BUY","RENT TO OWN","RENT2BUY",
+    "HOUSE SHARE","ROOM SHARE","SHARED","HMO",
+    "ALL BILLS INCLUDED","BILLS INCLUDED","INCLUSIVE OF BILLS",
 }
 
 # ------------------ Maths helpers ------------------ #
@@ -71,35 +82,32 @@ def monthly_net_from_adr(adr: float, occupancy: float) -> float:
     gross = adr * occupancy * 30
     return gross * (1 - BOOKING_FEE_PCT)
 
-def adr_to_hit_target(target: float, rent: float, bills: float, occupancy: float = 0.7) -> int:
+def adr_to_hit_target(target: float, rent: float, bills: float, occ: float = 0.7) -> int:
     net_needed = target + rent + bills
-    denom = occupancy * 30 * (1 - BOOKING_FEE_PCT)
-    if denom <= 0:
-        return 0
-    return int(round(net_needed / denom))
+    denom = occ * 30 * (1 - BOOKING_FEE_PCT)
+    return int(round(net_needed / denom)) if denom > 0 else 0
 
-def rent_to_hit_target(target: float, adr: float, bills: float, occupancy: float = 0.7) -> int:
-    net = monthly_net_from_adr(adr, occupancy)
+def rent_to_hit_target(target: float, adr: float, bills: float, occ: float = 0.7) -> int:
+    net = monthly_net_from_adr(adr, occ)
     return int(round(net - bills - target))
 
-# ------------------ Profit calculation ------------------ #
 def calculate_profits(rent_pcm: int, bedrooms: int, outcode: str):
     nightly_rate = HARDCODED_NIGHTLY.get(outcode, {}).get(bedrooms, 0)
-    total_bills = BILLS_ESTIMATE.get(bedrooms, 550)
+    bills = BILLS_EST.get(outcode, {}).get(str(bedrooms), 575)
 
     def profit(occ: float) -> int:
         net_income = monthly_net_from_adr(nightly_rate, occ)
-        return int(round(net_income - rent_pcm - total_bills))
+        return int(round(net_income - rent_pcm - bills))
 
     return {
         "night_rate": nightly_rate,
-        "total_bills": total_bills,
+        "bills": bills,
         "profit_50": profit(0.5),
         "profit_70": profit(0.7),
         "profit_100": profit(1.0),
     }
 
-# ------------------ Rightmove API fetch ------------------ #
+# ------------------ Rightmove fetch ------------------ #
 def fetch_properties(location_id: str) -> List[Dict]:
     params = {
         "locationIdentifier": location_id,
@@ -114,16 +122,18 @@ def fetch_properties(location_id: str) -> List[Dict]:
         "minBedrooms": MIN_BEDS,
         "maxBedrooms": MAX_BEDS,
         "maxPrice": MAX_PRICE,
+        "minBathrooms": 2,  # Mariana asked 2+ baths
+        "propertyTypes": "detached,semi-detached,terraced",
     }
     url = "https://www.rightmove.co.uk/api/_search"
     try:
-        resp = requests.get(url, params=params, timeout=30)
-        if resp.status_code != 200:
-            print(f"⚠️ API request failed for {location_id}: status={resp.status_code}")
+        r = requests.get(url, params=params, timeout=30)
+        if r.status_code != 200:
+            print(f"⚠️ API failed for {location_id}: {r.status_code}")
             return []
-        return resp.json().get("properties", [])
+        return r.json().get("properties", [])
     except Exception as e:
-        print(f"⚠️ Exception fetching properties for {location_id}: {e}")
+        print(f"⚠️ Exception fetching {location_id}: {e}")
         return []
 
 # ------------------ Filter & enrich ------------------ #
@@ -133,39 +143,38 @@ def filter_properties(properties: List[Dict], outcode: str) -> List[Dict]:
         try:
             beds = prop.get("bedrooms")
             rent = prop.get("price", {}).get("amount")
-            baths = prop.get("bathrooms", 0)
             subtype = (prop.get("propertySubType") or "House")
-            subtype_upper = subtype.upper()
+            subtype_up = subtype.upper()
             address = prop.get("displayAddress", "Unknown")
             summary = (prop.get("summary") or "").upper()
             title = (prop.get("propertyTitle") or "").upper()
+            baths = prop.get("bathrooms", 0)
 
-            if beds is None or rent is None:
-                continue
-            if not (MIN_BEDS <= beds <= MAX_BEDS):
-                continue
-            if rent > MAX_PRICE:
-                continue
-            if baths is not None and baths < MIN_BATHS:
-                continue
-            if subtype_upper in EXCLUDED_SUBTYPES:
-                continue
-
+            if beds is None or rent is None: continue
+            if not (MIN_BEDS <= beds <= MAX_BEDS): continue
+            if rent > MAX_PRICE: continue
+            if subtype_up in EXCLUDED_SUBTYPES: continue
             haystack = " ".join([address.upper(), summary, title])
-            if any(word in haystack for word in EXCLUDED_KEYWORDS):
-                continue
+            if any(w in haystack for w in EXCLUDED_KEYWORDS): continue
 
-            # Profit maths
             p = calculate_profits(rent, beds, outcode)
             p70 = p["profit_70"]
-            diff = p70 - GOOD_PROFIT_TARGET
 
-            rag = "🟢" if p70 >= GOOD_PROFIT_TARGET else ("🟡" if p70 >= GOOD_PROFIT_TARGET * 0.7 else "🔴")
-            score10 = round(max(0, min(10, (p70 / GOOD_PROFIT_TARGET) * 10)), 1)
+            # Boolean + message for Make/Telegram
+            meets_target = p70 >= TARGET_PROFIT_70
+            if meets_target:
+                ab_message = "🚀 Already ≥ target at 70% — no changes needed."
+            else:
+                need_adr  = adr_to_hit_target(TARGET_PROFIT_70, rent, p["bills"], 0.7)
+                need_rent = rent_to_hit_target(TARGET_PROFIT_70, p["night_rate"], p["bills"], 0.7)
+                ab_message = (
+                    "💡 *A/B to hit target @ 70%:*\n"
+                    f"• *A:* Raise nightly to *£{need_adr}*\n"
+                    f"• *B:* Negotiate rent to *~£{need_rent}*/mo*"
+                )
 
-            # A/B targets to go green (only meaningful if below target)
-            target_adr = adr_to_hit_target(GOOD_PROFIT_TARGET, rent, p["total_bills"], occupancy=0.7)
-            target_rent = rent_to_hit_target(GOOD_PROFIT_TARGET, p["night_rate"], p["total_bills"], occupancy=0.7)
+            rag = "🟢" if meets_target else ("🟡" if p70 >= TARGET_PROFIT_70 * 0.7 else "🔴")
+            score10 = round(max(0, min(10, (p70 / TARGET_PROFIT_70) * 10)), 1)
 
             listing = {
                 "id": prop.get("id"),
@@ -176,103 +185,64 @@ def filter_properties(properties: List[Dict], outcode: str) -> List[Dict]:
                 "bathrooms": baths,
                 "propertySubType": subtype,
                 "url": f"https://www.rightmove.co.uk{prop.get('propertyUrl')}",
-                "night_rate": p["night_rate"],
+                "nightly_rate": p["night_rate"],
                 "profit_50": p["profit_50"],
                 "profit_70": p70,
                 "profit_100": p["profit_100"],
-                "bills": p["total_bills"],
+                "bills": p["bills"],
+                "fees": int(BOOKING_FEE_PCT * 100),
                 "rag": rag,
                 "score10": score10,
-                "over_by": max(0, diff),
-                "below_by": max(0, -diff),
-                "to_green_target_adr": target_adr,
-                "to_green_target_rent": target_rent,
-                "target_profit_70": GOOD_PROFIT_TARGET,
-                # NEW: boolean for Make.com conditions
-                "meets_target": (p70 >= GOOD_PROFIT_TARGET),
+                "target_profit_70": TARGET_PROFIT_70,
+                "needed_nightly_rate": adr_to_hit_target(TARGET_PROFIT_70, rent, p["bills"], 0.7),
+                "needed_rent": rent_to_hit_target(TARGET_PROFIT_70, p["night_rate"], p["bills"], 0.7),
+                "meets_target": meets_target,      # ✅ boolean
+                "ab_message": ab_message,          # ✅ prebuilt text block
             }
             results.append(listing)
-        except Exception as e:
-            print(f"⚠️ Skipped a property due to error: {e}")
+        except Exception:
             continue
     return results
-
-# ------------------ Optional: console preview ------------------ #
-def preview_message(listing: Dict) -> str:
-    header = "🔔 New Rent-to-SA Lead"
-    body = (
-        f"{header}\n"
-        f"📍 {listing['address']}\n"
-        f"🏠 {listing['bedrooms']}-bed {listing['propertySubType']}  |  🛁 {listing.get('bathrooms','?')} baths\n"
-        f"💰 Rent: £{listing['rent_pcm']}/mo | Bills: £{listing['bills']}/mo | Fees: 15%\n"
-        f"🔗 {listing['url']}\n\n"
-        f"📊 Profit (Nightly £{listing['night_rate']})\n"
-        f"• 50% → £{listing['profit_50']}\n"
-        f"• 70% → £{listing['profit_70']}   🎯 Target: £{listing['target_profit_70']}\n"
-        f"• 100% → £{listing['profit_100']}\n\n"
-    )
-    if not listing["meets_target"]:
-        body += (
-            f"{listing['rag']} Score: {listing['score10']}/10\n"
-            f"💡 A/B @70% — ADR→£{listing['to_green_target_adr']}, Rent→~£{listing['to_green_target_rent']}/mo\n"
-        )
-    else:
-        body += "🚀 Already ≥ target at 70% — no changes needed.\n"
-    return body
 
 # ------------------ Scraper loop ------------------ #
 async def scrape_once(seen_ids: Set[str]) -> List[Dict]:
     new_listings = []
-    total_checked = 0
-    total_after_filters = 0
-
     for outcode, region_ids in OUTCODE_LOCATION_IDS.items():
-        print(f"\n📍 Searching outcode {outcode}…")
+        print(f"\n📍 Searching {outcode}…")
         for region_id in region_ids:
             raw_props = fetch_properties(region_id)
-            total_checked += len(raw_props)
             filtered = filter_properties(raw_props, outcode)
-            total_after_filters += len(filtered)
             for listing in filtered:
                 if listing["id"] in seen_ids:
                     continue
                 seen_ids.add(listing["id"])
                 new_listings.append(listing)
-
-    print(f"🔎 Checked {total_checked} raw; {total_after_filters} passed filters; {len(new_listings)} new to send.")
     return new_listings
 
 async def main() -> None:
     print("🚀 Scraper started!")
     seen_ids: Set[str] = set()
-
     while True:
         try:
-            print(f"\n⏰ New scrape at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            ts = time.strftime('%Y-%m-%d %H:%M:%S')
+            print(f"\n⏰ New scrape at {ts}")
             new_listings = await scrape_once(seen_ids)
 
             if not new_listings:
-                print("ℹ️ No new listings matched the criteria this run.")
-            else:
-                for listing in new_listings:
-                    # console preview
-                    print("────────────────────────────────────────")
-                    print(preview_message(listing))
-                    print("────────────────────────────────────────")
-                    print(f"✅ Sending: {listing['address']} – £{listing['rent_pcm']} – {listing['bedrooms']} beds")
-                    try:
-                        # Send structured payload to Make (Telegram template formats it)
-                        requests.post(WEBHOOK_URL, json=listing, timeout=10)
-                    except Exception as e:
-                        print(f"⚠️ Failed to POST to webhook: {e}")
+                print("ℹ️ No new listings found this run.")
+            for listing in new_listings:
+                print(f"✅ Sending: {listing['address']} — £{listing['rent_pcm']} — {listing['bedrooms']} beds")
+                try:
+                    requests.post(WEBHOOK_URL, json=listing, timeout=10)
+                except Exception as e:
+                    print(f"⚠️ POST to webhook failed: {e}")
 
-            # Sleep ~1h ±5m
-            sleep_duration = 3600 + random.randint(-300, 300)
-            print(f"💤 Sleeping for {sleep_duration} seconds…")
-            await asyncio.sleep(sleep_duration)
+            sleep_sec = 3600 + random.randint(-300, 300)
+            print(f"💤 Sleeping {sleep_sec}s…")
+            await asyncio.sleep(sleep_sec)
 
         except Exception as e:
-            print(f"🔥 Error in main loop: {e}")
+            print(f"🔥 Loop error: {e}")
             await asyncio.sleep(300)
 
 if __name__ == "__main__":
