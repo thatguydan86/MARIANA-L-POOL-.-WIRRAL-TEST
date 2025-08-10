@@ -7,7 +7,7 @@ from typing import Dict, List, Set
 print("🚀 Starting RentRadar…")
 
 # ========= Config =========
-WEBHOOK_URL = "https://hook.eu2.make.com/ll7gkhmnr3pd2xgwt2sjvp2fw3gzpbil"  # <- your Make.com webhook
+WEBHOOK_URL = "https://hook.eu2.make.com/qsk78c4p25ii0anm32kien7okkmtbit6"  # <- your Make.com webhook
 
 # Postcodes -> Rightmove OUTCODE identifiers
 OUTCODE_LOCATION_IDS: Dict[str, List[str]] = {
