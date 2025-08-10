@@ -6,7 +6,7 @@ from typing import Dict, List, Set
 
 print("🚀 Starting RentRadar scraper…")
 
-WEBHOOK_URL = "https://hook.eu2.make.com/ll7gkhmnr3pd2xgwt2sjvp2fw3gzpbil"  # Make.com webhook
+WEBHOOK_URL = "https://hook.eu2.make.com/qsk78c4p25ii0anm32kien7okkmtbit6"  # Make.com webhook
 
 # ---- Search regions (Rightmove OUTCODE IDs) ----
 OUTCODE_LOCATION_IDS: Dict[str, List[str]] = {
