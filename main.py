@@ -7,7 +7,7 @@ from typing import Dict, List, Set
 print("🚀 Starting RentRadar…")
 
 # ========= Config =========
-WEBHOOK_URL = "https://hook.eu2.make.com/6k1jjsv0khxbqbfplzv5ibt4d1wh3dwj"
+WEBHOOK_URL = "https://hook.eu2.make.com/qsk78c4p25ii0anm32kien7okkmtbit6"
 
 LOCATION_IDS: Dict[str, str] = {
     "Lincoln": "REGION^804",
