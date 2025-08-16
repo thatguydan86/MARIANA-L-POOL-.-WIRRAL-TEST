@@ -15,43 +15,49 @@ LOCATION_IDS: Dict[str, str] = {
     "Bridgwater": "REGION^212",
 }
 
-MIN_BEDS = 4
+MIN_BEDS = 3
 MAX_BEDS = 4
-MIN_BATHS = 2
+MIN_BATHS = 1
 MIN_RENT = 800
-MAX_PRICE = 1500
 GOOD_PROFIT_TARGET = 1300
 BOOKING_FEE_PCT = 0.15
 
-# Bills per area (4-bed)
-BILLS_PER_AREA: Dict[str, int] = {
-    "Lincoln": 580,
-    "Wirral": 620,
-    "Bridgwater": 600,
+# Max rent caps depending on bedrooms
+MAX_RENTS: Dict[int, int] = {
+    3: 1300,
+    4: 1500,
 }
 
-# Nightly rates per area (ADR for 4-beds)  ✅
-NIGHTLY_RATES: Dict[str, int] = {
-    "Lincoln": 178,
-    "Wirral": 196,
-    "Bridgwater": 205,
+# Bills per area & bedroom count (average utilities + council tax)
+BILLS_PER_AREA: Dict[str, Dict[int, int]] = {
+    "Lincoln": {3: 520, 4: 580},
+    "Wirral": {3: 540, 4: 620},
+    "Bridgwater": {3: 530, 4: 600},
 }
 
-# Log live config so you can verify deploys
-print(
-    f"ADRs -> Lincoln:{NIGHTLY_RATES['Lincoln']} "
-    f"Wirral:{NIGHTLY_RATES['Wirral']} "
-    f"Bridgwater:{NIGHTLY_RATES['Bridgwater']}"
-)
+# Nightly ADR per area & bedroom count
+NIGHTLY_RATES: Dict[str, Dict[int, int]] = {
+    "Lincoln": {3: 150, 4: 178},
+    "Wirral": {3: 165, 4: 196},
+    "Bridgwater": {3: 170, 4: 205},
+}
+
+# Occupancy rates per area & bedroom count (averaged from SA data)
+OCCUPANCY: Dict[str, Dict[int, float]] = {
+    "Lincoln": {3: 0.65, 4: 0.66},
+    "Wirral": {3: 0.67, 4: 0.68},
+    "Bridgwater": {3: 0.66, 4: 0.67},
+}
 
 # ========= Helpers =========
 def monthly_net_from_adr(adr: float, occ: float) -> float:
     gross = adr * occ * 30
     return gross * (1 - BOOKING_FEE_PCT)
 
-def calculate_profits(rent_pcm: int, area: str):
-    nightly_rate = NIGHTLY_RATES.get(area, 150)
-    total_bills = BILLS_PER_AREA.get(area, 600)
+def calculate_profits(rent_pcm: int, area: str, beds: int):
+    nightly_rate = NIGHTLY_RATES.get(area, {}).get(beds, 150)
+    occ_rate = OCCUPANCY.get(area, {}).get(beds, 0.65)
+    total_bills = BILLS_PER_AREA.get(area, {}).get(beds, 600)
 
     def profit(occ: float) -> int:
         net_income = monthly_net_from_adr(nightly_rate, occ)
@@ -59,6 +65,7 @@ def calculate_profits(rent_pcm: int, area: str):
 
     return {
         "night_rate": nightly_rate,
+        "occ_rate": int(round(occ_rate * 100)),  # % occupancy for display
         "total_bills": total_bills,
         "profit_50": profit(0.5),
         "profit_70": profit(0.7),
@@ -80,7 +87,6 @@ def fetch_properties(location_id: str) -> List[Dict]:
         "maxBedrooms": MAX_BEDS,
         "minBathrooms": MIN_BATHS,
         "minPrice": MIN_RENT,
-        "maxPrice": MAX_PRICE,
         "_includeLetAgreed": "on",
     }
     url = "https://www.rightmove.co.uk/api/_search"
@@ -107,17 +113,19 @@ def filter_properties(properties: List[Dict], area: str) -> List[Dict]:
 
             if not beds or not rent:
                 continue
-            if beds != 4:
+            if beds < MIN_BEDS or beds > MAX_BEDS:
                 continue
             if baths < MIN_BATHS:
                 continue
-            if rent < MIN_RENT or rent > MAX_PRICE:
+
+            max_rent_allowed = MAX_RENTS.get(beds, 1500)
+            if rent < MIN_RENT or rent > max_rent_allowed:
                 continue
 
-            p = calculate_profits(rent, area)
+            p = calculate_profits(rent, area, beds)
             p70 = p["profit_70"]
 
-            # simple score + RAG (kept because it's useful)
+            # score + RAG
             score10 = round(max(0, min(10, (p70 / GOOD_PROFIT_TARGET) * 10)), 1)
             rag = "🟢" if p70 >= GOOD_PROFIT_TARGET else ("🟡" if p70 >= GOOD_PROFIT_TARGET * 0.7 else "🔴")
 
@@ -131,6 +139,7 @@ def filter_properties(properties: List[Dict], area: str) -> List[Dict]:
                 "propertySubType": subtype.title(),
                 "url": f"https://www.rightmove.co.uk{prop.get('propertyUrl')}",
                 "night_rate": p["night_rate"],
+                "occ_rate": p["occ_rate"],
                 "bills": p["total_bills"],
                 "profit_50": p["profit_50"],
                 "profit_70": p70,
@@ -173,7 +182,7 @@ async def main() -> None:
                 print(
                     f"✅ Sending: {listing['address']} – £{listing['rent_pcm']} – "
                     f"{listing['bedrooms']} beds / {listing['bathrooms']} baths "
-                    f"(ADR £{listing['night_rate']})"
+                    f"(ADR £{listing['night_rate']} @ {listing['occ_rate']}% occ)"
                 )
                 try:
                     requests.post(WEBHOOK_URL, json=listing, timeout=10)
